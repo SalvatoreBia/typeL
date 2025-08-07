@@ -101,7 +101,6 @@ char **get_chunk()
 	if (chunk == NULL)
 	{
 		perror("***ERROR: failed to allocate memory for word chunk!");
-		fclose(file);
 		exit(EXIT_FAILURE);
 	}
 
@@ -152,6 +151,9 @@ int add_player(session_t *session, const char *uuid_str)
 		perror("***ERROR: can't add player since provided session is null!");
 		exit(EXIT_FAILURE);
 	}
+
+	if (session->is_single_player && session->players_count == 1)
+		return 0;
 
 	if (session->players_count == MAX_LOBBY_COUNT)
 		return 0;
