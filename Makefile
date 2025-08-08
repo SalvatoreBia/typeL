@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -Wextra -g
-LDFLAGS = -lwebsockets
+LDFLAGS = -lcjson -lpthread
 TARGET = typer
 
 OBJS = backend.o network.o

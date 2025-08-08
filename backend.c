@@ -157,9 +157,9 @@ int add_player(session_t *session, client_t *client)
 }
 
 
-void remove_player(session_t *session, const char *uuid_str)
+void remove_player(session_list_t *list, session_t *session, const char *uuid_str)
 {
-	if (!session || !uuid_str)
+	if (!session || !uuid_str || !list)
 		return;
 
 	pthread_mutex_lock(&session->lock);
@@ -170,20 +170,27 @@ void remove_player(session_t *session, const char *uuid_str)
 		return;
 	}
 
+	int found = 0;
 	for (int i = 0; i < MAX_LOBBY_COUNT; i++)
 	{
 		if (session->players[i] && strcmp(session->players[i]->uuid, uuid_str) == 0)
 		{
 			session->players[i] = NULL;
 			session->players_count--;
-			pthread_mutex_unlock(&session->lock);
-			return;
+			found = 1;
+			break;
 		}
 	}
 
+	int is_empty = (session->players_count == 0);
 	pthread_mutex_unlock(&session->lock);
-}
 
+	if (found && is_empty)
+	{
+		printf("Last player removed, freeing session\n");
+		remove_session(list, session);
+	}
+}
 
 
 int is_correct(const char *target, const char *input)

@@ -8,9 +8,6 @@
 #define WORD_FILE       "word_list.txt"
 #define WORD_MAX_LEN    25
 #define WORD_CHUNK      50
-#define UUID_LEN        37
-#define MAX_LOBBY_COUNT 8
-#define MAX_SESSIONS    16
 
 
 extern char **words_g;
@@ -37,7 +34,7 @@ typedef struct __typing_session_list
 
 session_t* create_session();
 int add_player(session_t *session, client_t *client);
-void remove_player(session_t *session, const char *uuid_str);
+void remove_player(session_list_t *list, session_t *session, const char *uuid_str);
 void free_session(session_t *session);
 
 session_list_t* create_session_list();
