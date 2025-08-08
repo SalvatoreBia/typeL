@@ -1,31 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <uuid/uuid.h>
-
-
-#define WORD_FILE       "word_list.txt"
-#define WORD_MAX_LEN    25
-#define WORD_CHUNK      30
-
-#define UUID_LEN        37
-#define MAX_LOBBY_COUNT 8
+#include "backend.h"
+#include "network.h"
 
 
 char **words_g;
 int  words_len_g;
-
-
-typedef struct __typing_session
-{
-	int    has_started;
-	int    is_single_player;
-	char   **list;
-	char   **next;
-	char   player_ids[MAX_LOBBY_COUNT][UUID_LEN];
-	int    players_count;
-} session_t;
 
 
 int fcount_lines(const char *filename)
@@ -138,8 +120,10 @@ session_t* create_session(int is_single_player)
 	session->has_started = 0;
 	session->is_single_player = is_single_player;
 	session->list = get_chunk();
-	session->next = get_chunk();
 	session->players_count = 0;
+
+	for (int i = 0; i < MAX_LOBBY_COUNT; i++)
+		session->player_ids[i][0] = '\0';
 
 	return session;
 }
@@ -152,18 +136,24 @@ int add_player(session_t *session, const char *uuid_str)
 		exit(EXIT_FAILURE);
 	}
 
+	if (uuid_str == NULL)
+		return -1;
+
 	if (session->is_single_player && session->players_count == 1)
-		return 0;
+		return -1;
 
-	if (session->players_count == MAX_LOBBY_COUNT)
-		return 0;
+	for (int i = 0; i < MAX_LOBBY_COUNT; i++)
+	{
+		if (session->player_ids[i][0] == '\0')
+		{
+			strncpy(session->player_ids[i], uuid_str, UUID_LEN - 1);
+			session->player_ids[i][UUID_LEN - 1] = '\0';
+			session->players_count++;
+			return i;
+		}
+	}
 
-	strncpy(session->player_ids[session->players_count], uuid_str, UUID_LEN - 1);
-	session->player_ids[session->players_count][UUID_LEN - 1] = '\0';
-
-	session->players_count++;
-
-	return session->players_count;
+	return 0;
 }
 
 
@@ -182,6 +172,7 @@ void remove_player(session_t *session, const char *uuid_str)
 		if (strcmp(session->player_ids[i], uuid_str) == 0)
 		{
 			session->players_count--;
+			session->player_ids[i][0] = '\0';
 			return;
 		}
 		i++;
@@ -195,33 +186,6 @@ int is_correct(const char *target, const char *input)
 }
 
 
-void swap_session_words(session_t *session)
-{
-	if (session == NULL)
-	{
-		perror("ERROR: session is null!");
-		exit(EXIT_FAILURE);
-	}
-
-	if (session->list) 
-	{
-		for (int i = 0; i < WORD_CHUNK; i++)
-			free(session->list[i]);
-		free(session->list);
-	}
-
-	session->list = session->next;
-
-	session->next = get_chunk();
-	if (!session->next) 
-	{
-		perror("ERROR: failed to generate next chunk!");
-		exit(EXIT_FAILURE);
-	}
-}
-
-
-
 void free_session(session_t *session)
 {
 	if (session)
@@ -229,22 +193,123 @@ void free_session(session_t *session)
 		for (int i = 0; i < WORD_CHUNK; i++)
 		{
 			free(session->list[i]);
-			free(session->next[i]);
 		}
 
 		free(session->list);
-		free(session->next);
 
 		free(session);
 	}
 }
 
 
-int main(int argc, char **argv)
+session_list_t* create_session_list()
+{
+	session_list_t *list = (session_list_t*) malloc(sizeof(session_list_t));
+	if (list == NULL)
+	{
+		perror("***ERROR: memory allocation failed for session list!");
+		exit(EXIT_FAILURE);
+	}
+
+	list->count = 0;
+
+	list->sessions = (session_t**) malloc(MAX_SESSIONS * sizeof(session_t*));
+	if (list->sessions == NULL)
+	{
+		perror("***ERROR: memory allocation failed for session object!");
+		free(list);
+		exit(EXIT_FAILURE);
+	}	
+
+	for (int i = 0; i < MAX_SESSIONS; i++)
+		list->sessions[i] = NULL;
+		
+	return list;
+}
+
+
+int add_session(session_list_t *list, session_t *session)
+{
+
+	if (session == NULL)
+		return 0;
+	
+	if (list == NULL)
+	{
+		perror("***ERROR: pointer to session_list_t is null!");
+		exit(EXIT_FAILURE);
+	}
+
+	if (list->count == MAX_SESSIONS)
+		return 0;
+
+	for (int i = 0; i < MAX_SESSIONS; i++)
+	{
+		if (list->sessions[i] == NULL)
+		{
+			list->sessions[i] = session;
+			list->count++;
+			return i;
+		}
+	}
+	
+	return 0;
+}
+
+
+void remove_session(session_list_t *list, session_t *session)
+{
+	if (session == NULL)
+		return;
+				
+	if (list == NULL)
+	{
+		perror("***ERROR: pointer to session_list_t is null!");
+		exit(EXIT_FAILURE);
+	}
+
+	if (list->count == 0)
+		return;
+
+	for (int i = 0; i < MAX_SESSIONS;)
+	{
+		if (list->sessions[i] == session)
+		{
+			free_session(list->sessions[i]);
+			list->sessions[i] = NULL;
+			list->count--;
+			return;
+		}
+
+		i++;
+	}
+}
+
+
+void free_session_list(session_list_t *list)
+{
+	if (list)
+	{
+		for (int i = 0; i < MAX_SESSIONS; i++)
+			free_session(list->sessions[i]);
+		free(list->sessions);
+		free(list);
+	}
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~ MAIN ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+int main()
 {
 	srand(time(NULL));
-	
+
 	init_words_g();
+
+	session_list_t *list = create_session_list();
+
+	start_server(list);
+
+	free_session_list(list);
 
 	return 0;
 }
