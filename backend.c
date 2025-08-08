@@ -108,7 +108,7 @@ char **get_chunk()
 }
 
 
-session_t* create_session(int is_single_player)
+session_t* create_session()
 {
 	session_t *session = (session_t*) malloc(sizeof(session_t));
 	if (session == NULL)
@@ -118,66 +118,72 @@ session_t* create_session(int is_single_player)
 	}
 
 	session->has_started = 0;
-	session->is_single_player = is_single_player;
 	session->list = get_chunk();
 	session->players_count = 0;
 
+	if (pthread_mutex_init(&session->lock, NULL) != 0)
+	{
+		perror("***ERROR: failed to initialize session mutex!");
+		free(session);
+		exit(EXIT_FAILURE);
+	}
+
 	for (int i = 0; i < MAX_LOBBY_COUNT; i++)
-		session->player_ids[i][0] = '\0';
+		session->players[i] = NULL;
 
 	return session;
 }
 
-int add_player(session_t *session, const char *uuid_str)
+int add_player(session_t *session, client_t *client)
 {
-	if (session == NULL)
-	{
-		perror("***ERROR: can't add player since provided session is null!");
-		exit(EXIT_FAILURE);
-	}
+	if (!session || !client)
+		return 0;
 
-	if (uuid_str == NULL)
-		return -1;
-
-	if (session->is_single_player && session->players_count == 1)
-		return -1;
+	pthread_mutex_lock(&session->lock);
 
 	for (int i = 0; i < MAX_LOBBY_COUNT; i++)
 	{
-		if (session->player_ids[i][0] == '\0')
+		if (session->players[i] == NULL)
 		{
-			strncpy(session->player_ids[i], uuid_str, UUID_LEN - 1);
-			session->player_ids[i][UUID_LEN - 1] = '\0';
+			session->players[i] = client;
 			session->players_count++;
-			return i;
+			pthread_mutex_unlock(&session->lock);
+			return session->players_count;
 		}
 	}
 
+	pthread_mutex_unlock(&session->lock);
 	return 0;
 }
 
 
 void remove_player(session_t *session, const char *uuid_str)
 {
-	if (session == NULL)
+	if (!session || !uuid_str)
+		return;
+
+	pthread_mutex_lock(&session->lock);
+
+	if (session->players_count == 0)
 	{
-		perror("***ERROR: session is null!");
-		exit(EXIT_FAILURE);
+		pthread_mutex_unlock(&session->lock);
+		return;
 	}
 
-	if (session->players_count == 0) return;
-
-	for (int i = 0; i < session->players_count;)
+	for (int i = 0; i < MAX_LOBBY_COUNT; i++)
 	{
-		if (strcmp(session->player_ids[i], uuid_str) == 0)
+		if (session->players[i] && strcmp(session->players[i]->uuid, uuid_str) == 0)
 		{
+			session->players[i] = NULL;
 			session->players_count--;
-			session->player_ids[i][0] = '\0';
+			pthread_mutex_unlock(&session->lock);
 			return;
 		}
-		i++;
 	}
+
+	pthread_mutex_unlock(&session->lock);
 }
+
 
 
 int is_correct(const char *target, const char *input)
@@ -197,6 +203,8 @@ void free_session(session_t *session)
 
 		free(session->list);
 
+		pthread_mutex_destroy(&session->lock);
+
 		free(session);
 	}
 }
@@ -213,10 +221,18 @@ session_list_t* create_session_list()
 
 	list->count = 0;
 
+	if (pthread_mutex_init(&list->lock, NULL) != 0)
+	{
+		perror("***ERROR: failed to initialize session list mutex!");
+		free(list);
+		exit(EXIT_FAILURE);
+	}
+
 	list->sessions = (session_t**) malloc(MAX_SESSIONS * sizeof(session_t*));
 	if (list->sessions == NULL)
 	{
 		perror("***ERROR: memory allocation failed for session object!");
+		pthread_mutex_destroy(&list->lock);
 		free(list);
 		exit(EXIT_FAILURE);
 	}	
@@ -230,18 +246,23 @@ session_list_t* create_session_list()
 
 int add_session(session_list_t *list, session_t *session)
 {
-
 	if (session == NULL)
 		return 0;
-	
+
+	pthread_mutex_lock(&list->lock);
+
 	if (list == NULL)
 	{
+		pthread_mutex_unlock(&list->lock);
 		perror("***ERROR: pointer to session_list_t is null!");
 		exit(EXIT_FAILURE);
 	}
 
 	if (list->count == MAX_SESSIONS)
+	{
+		pthread_mutex_unlock(&list->lock);
 		return 0;
+	}
 
 	for (int i = 0; i < MAX_SESSIONS; i++)
 	{
@@ -249,10 +270,12 @@ int add_session(session_list_t *list, session_t *session)
 		{
 			list->sessions[i] = session;
 			list->count++;
+			pthread_mutex_unlock(&list->lock);
 			return i;
 		}
 	}
-	
+
+	pthread_mutex_unlock(&list->lock);
 	return 0;
 }
 
@@ -261,28 +284,85 @@ void remove_session(session_list_t *list, session_t *session)
 {
 	if (session == NULL)
 		return;
-				
+
 	if (list == NULL)
 	{
 		perror("***ERROR: pointer to session_list_t is null!");
 		exit(EXIT_FAILURE);
 	}
 
-	if (list->count == 0)
-		return;
+	pthread_mutex_lock(&list->lock);
 
-	for (int i = 0; i < MAX_SESSIONS;)
+	if (list->count == 0)
+	{
+		pthread_mutex_unlock(&list->lock);
+		return;
+	}
+
+	for (int i = 0; i < MAX_SESSIONS; i++)
 	{
 		if (list->sessions[i] == session)
 		{
 			free_session(list->sessions[i]);
 			list->sessions[i] = NULL;
 			list->count--;
+			pthread_mutex_unlock(&list->lock);
 			return;
 		}
-
-		i++;
 	}
+
+	pthread_mutex_unlock(&list->lock);
+}
+
+
+session_t* find_free_session(session_list_t *list)
+{
+	if (list == NULL)
+	{
+		perror("***ERROR: session_list_t is null!");
+		exit(EXIT_FAILURE);
+	}
+
+	pthread_mutex_lock(&list->lock);
+
+	if (list->count == MAX_SESSIONS)
+	{
+		pthread_mutex_unlock(&list->lock);
+		return NULL;
+	}
+
+	int first_session_available = -1;
+
+	for (int i = 0; i < MAX_SESSIONS; i++)
+	{
+		if (list->sessions[i])
+		{
+			pthread_mutex_lock(&list->sessions[i]->lock);
+			if (list->sessions[i]->players_count < MAX_LOBBY_COUNT && !list->sessions[i]->has_started)
+			{
+				session_t *result = list->sessions[i];
+				pthread_mutex_unlock(&list->sessions[i]->lock);
+				pthread_mutex_unlock(&list->lock);
+				return result;
+			}
+			pthread_mutex_unlock(&list->sessions[i]->lock);
+		}
+
+		if (list->sessions[i] == NULL && first_session_available == -1)
+			first_session_available = i;
+	}
+
+	if (first_session_available != -1)
+	{
+		list->sessions[first_session_available] = create_session();
+		list->count++;
+		session_t *result = list->sessions[first_session_available];
+		pthread_mutex_unlock(&list->lock);
+		return result;
+	}
+
+	pthread_mutex_unlock(&list->lock);
+	return NULL;
 }
 
 
@@ -290,26 +370,13 @@ void free_session_list(session_list_t *list)
 {
 	if (list)
 	{
+		pthread_mutex_lock(&list->lock);
 		for (int i = 0; i < MAX_SESSIONS; i++)
 			free_session(list->sessions[i]);
+		pthread_mutex_unlock(&list->lock);
+
+		pthread_mutex_destroy(&list->lock);
 		free(list->sessions);
 		free(list);
 	}
-}
-
-// ~~~~~~~~~~~~~~~~~~~~~ MAIN ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-int main()
-{
-	srand(time(NULL));
-
-	init_words_g();
-
-	session_list_t *list = create_session_list();
-
-	start_server(list);
-
-	free_session_list(list);
-
-	return 0;
 }
