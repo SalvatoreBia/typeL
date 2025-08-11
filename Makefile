@@ -1,17 +1,23 @@
-CC = gcc
-CFLAGS = -Wall -Wextra -g
-LDFLAGS = -lcjson -lpthread
-TARGET = typer
+CC=gcc
+CFLAGS=-std=c11 -O2 -Wall -Wextra -pedantic -pthread -D_XOPEN_SOURCE=700
+LDFLAGS=
+LIBS=-lcjson
 
-OBJS = backend.o network.o
+# per macOS (commenta se non serve)
+# CFLAGS += -I/opt/homebrew/include
+# LDFLAGS += -L/opt/homebrew/lib
 
-all: $(TARGET)
+SRCS=backend.c network.c
+OBJS=$(SRCS:.c=.o)
+BIN=typer-server
 
-$(TARGET): $(OBJS)
-	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+all: $(BIN)
+
+$(BIN): $(OBJS)
+	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) $(LIBS) -o $@
 
 %.o: %.c
-	$(CC) $(CFLAGS) -c $<
+	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f *.o $(TARGET)
+	rm -f $(OBJS) $(BIN)
