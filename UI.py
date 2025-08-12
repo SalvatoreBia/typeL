@@ -15,15 +15,18 @@ AFTER_SCOREBOARD_GAP = 1
 
 
 class PlayerState(NamedTuple):
+    uuid: str
     name: str
     wpm: int = 0
     finished_rank: Optional[int] = None  
+    progress: int = 0
 
 
 class GameState:
     def __init__(self):
         
         self.players: Dict[str, PlayerState] = {}
+        self.me_uuid: str = ""
         self.me_name: str = ""
         self.words: List[str] = []
         
@@ -95,6 +98,7 @@ class CursesUI:
         self.client = client
         self.state = GameState()
         self.state.me_name = name
+        self.state.me_uuid = client.uuid or ""
 
         self.event_q: "queue.Queue[dict]" = queue.Queue()
         self.ascii_borders = False  
@@ -222,41 +226,95 @@ class CursesUI:
         except queue.Empty:
             pass
 
+    def _msg_uuid(self, msg: dict) -> Optional[str]:
+        d = msg.get("data") or {}
+        return d.get("uuid") or msg.get("uuid") or msg.get("player_uuid")
+
     def _apply_msg(self, msg: dict):
         t = msg.get("type")
+
         if t == "lobby":
-            name = msg.get("player") or ""
-            if name and name not in self.state.players:
-                self.state.players[name] = PlayerState(name=name, wpm=0)
-        elif t == "countdown":
-            self.state.session_active = True
+            uid = self._msg_uuid(msg)
+            name = msg.get("player") or (msg.get("data") or {}).get("name") or ""
+            if not uid:
+                uid = f"name::{name}"  # fallback se il server non manda l'uuid
+            if uid not in self.state.players:
+                self.state.players[uid] = PlayerState(uuid=uid, name=name, wpm=0, progress=0)
+
+        elif t == "info":
+            uid = self._msg_uuid(msg)
+            name = msg.get("player") or (msg.get("data") or {}).get("name") or ""
+            if not uid:
+                uid = f"name::{name}"
+            if uid not in self.state.players:
+                self.state.players[uid] = PlayerState(uuid=uid, name=name, wpm=0, progress=0)
+            self.state.last_message = msg.get("message") or self.state.last_message
+
         elif t == "words":
             data = msg.get("data") or {}
             self.state.words = list(data.get("words") or [])
             self.state.curr_idx = 0
             self.state.line_start_idx = 0
             self.state.current_typed = ""
+            # reset progresso & rank per tutti
+            for uid, ps in list(self.state.players.items()):
+                self.state.players[uid] = PlayerState(uuid=ps.uuid, name=ps.name,
+                                                    wpm=ps.wpm, finished_rank=None, progress=0)
+
         elif t == "wpm":
-            name = msg.get("player") or ""
+            uid = self._msg_uuid(msg)
+            name = msg.get("player") or (msg.get("data") or {}).get("name") or ""
+            if not uid:
+                uid = f"name::{name}"
             data = msg.get("data") or {}
-            wpm = int(data.get("value") or 0)
-            ps = self.state.players.get(name) or PlayerState(name=name, wpm=0)
-            self.state.players[name] = PlayerState(name=ps.name, wpm=wpm, finished_rank=ps.finished_rank)
+            new_wpm = int(data.get("value") or 0)
+
+            ps = self.state.players.get(uid)
+            if not ps:
+                ps = PlayerState(uuid=uid, name=name, wpm=0, progress=0)
+
+            # progresso: incrementa di 1 SOLO se non sono io
+            new_progress = ps.progress
+            if uid != self.state.me_uuid and self.state.words:
+                new_progress = min(len(self.state.words), ps.progress + 1)
+
+            self.state.players[uid] = PlayerState(
+                uuid=ps.uuid,
+                name=ps.name or name,
+                wpm=new_wpm,
+                finished_rank=ps.finished_rank,
+                progress=new_progress,
+            )
+
         elif t == "completed":
-            
-            name = msg.get("player") or self.state.me_name
-            if name not in self.state.rank_order:
-                self.state.rank_order.append(name)
-            rank = self.state.rank_order.index(name) + 1
-            ps = self.state.players.get(name) or PlayerState(name=name)
-            self.state.players[name] = PlayerState(name=ps.name, wpm=ps.wpm, finished_rank=rank)
+            uid = self._msg_uuid(msg) or f"name::{msg.get('player') or ''}"
+            if uid not in self.state.rank_order:
+                self.state.rank_order.append(uid)
+            rank = self.state.rank_order.index(uid) + 1
+
+            ps = self.state.players.get(uid)
+            if not ps:
+                ps = PlayerState(uuid=uid, name=msg.get("player") or "", wpm=0, progress=0)
+
+            final_prog = len(self.state.words)
+            self.state.players[uid] = PlayerState(
+                uuid=ps.uuid,
+                name=ps.name,
+                wpm=ps.wpm,
+                finished_rank=rank,
+                progress=(ps.progress if uid == self.state.me_uuid else final_prog),
+            )
+
         elif t in ("session_end", "timeout", "inactive_timeout", "bye"):
             self.state.session_ended = True
+
         elif t == "error":
             self.state.last_message = msg.get("message") or "error"
+
         else:
             if msg.get("message"):
                 self.state.last_message = msg["message"]
+
 
     
     def _render(self):
@@ -323,10 +381,13 @@ class CursesUI:
         max_lines = max(1, min(5, len(players)))
 
         for i, p in enumerate(players[:max_lines]):
-            bar = "-" * bar_width
-            if p.name == self.state.me_name:
-                done = min(bar_width, self.state.me_progress())
-                bar = "*" * done + "-" * (bar_width - done)
+            if p.uuid == self.state.me_uuid:
+                prog_words = self.state.me_progress()
+            else:
+                prog_words = p.progress
+
+            done = min(bar_width, prog_words)
+            bar = "*" * done + "-" * (bar_width - done)
 
             rank_attr = curses.A_NORMAL
             if p.finished_rank == 1:
@@ -342,6 +403,7 @@ class CursesUI:
             self._addn(win, y + i, x1 + len(name_txt) + 1, bar, maxw - (len(name_txt) + 1))
             self._addn(win, y + i, x2 - len(wpm_txt) + 1, wpm_txt, len(wpm_txt))
         return y + max_lines
+    
 
     def _draw_words_area_in(self, win, top, x1, x2):
         ih, iw = win.getmaxyx()
@@ -353,12 +415,12 @@ class CursesUI:
 
         y = top
         x = x1
-        
+
         cursor_y, cursor_x, cursor_visible = y, x, False
 
         for idx, w in top_line:
             if idx < self.state.curr_idx:
-                
+                # parola già corretta
                 self._addn(win, y, x, w, width - (x - x1), curses.color_pair(self.GREEN) | curses.A_BOLD)
                 x += len(w) + 1
                 continue
@@ -369,7 +431,7 @@ class CursesUI:
                 caret_x = x + min(len(typed), len(w))
                 cursor_y, cursor_x = y, caret_x
                 cursor_visible = True
-                
+
                 common = 0
                 for a, b in zip(typed, w):
                     if a == b:
@@ -378,27 +440,28 @@ class CursesUI:
                         break
                 if common:
                     self._addn(win, y, x, w[:common], width - (x - x1),
-                            curses.color_pair(self.GREEN) | curses.A_BOLD)
+                               curses.color_pair(self.GREEN) | curses.A_BOLD)
                     x += common
 
                 if len(typed) > common:
                     wrong = typed[common:len(typed)]
                     self._addn(win, y, x, wrong, width - (x - x1),
-                            curses.color_pair(self.RED) | curses.A_BOLD)
+                               curses.color_pair(self.RED) | curses.A_BOLD)
                     x += len(wrong)
 
                 rest = w[len(typed):]
                 if rest:
                     self._addn(win, y, x, rest, width - (x - x1))
                     x += len(rest)
-                
+
                 self._addn(win, y, x, " ", 1)
                 x += 1
                 continue
 
+            # parole future
             self._addn(win, y, x, w, width - (x - x1))
             x += len(w) + 1
-        
+
         y2 = top + WORDS_LINE_GAP
         x = x1
         for _, w in bottom_line:
@@ -406,6 +469,7 @@ class CursesUI:
             x += len(w) + 1
 
         return cursor_y, cursor_x, cursor_visible
+
 
     
     def _draw_box(self, win, top, left, bottom, right):
@@ -460,7 +524,7 @@ def start_ui(host="127.0.0.1", port=9000, name="player"):
     def _main(stdscr):
         ui = CursesUI(stdscr, client, name)
         
-        ui.state.players[name] = PlayerState(name=name, wpm=0)
+        ui.state.players[client.uuid] = PlayerState(uuid=client.uuid, name=name, wpm=0)
         ui.run()
 
     curses.wrapper(_main)

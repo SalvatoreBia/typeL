@@ -70,6 +70,7 @@ static void send_event(int fd,
 }
 
 static void notify_all_players_event(session_t *session,
+                                     client_t *client,
                                      const char *type,
                                      const char *player,
                                      const char *message,
@@ -79,7 +80,7 @@ static void notify_all_players_event(session_t *session,
 
     pthread_mutex_lock(&session->lock);
     for (int i = 0; i < MAX_LOBBY_COUNT; i++)
-        if (session->players[i])
+        if (session->players[i] && (client == NULL || session->players[i] != client))
             fds[n++] = session->players[i]->socket;
     pthread_mutex_unlock(&session->lock);
 
@@ -105,7 +106,7 @@ void *session_countdown(void *arg)
         cJSON *d = cJSON_CreateObject();
         if (d)
             cJSON_AddNumberToObject(d, "value", i);
-        notify_all_players_event(session, "countdown", NULL, NULL, d);
+        notify_all_players_event(session, NULL, "countdown", NULL, NULL, d);
         sleep(1);
     }
 
@@ -126,7 +127,7 @@ void *session_countdown(void *arg)
         if (d)
         {
             cJSON_AddItemToObject(d, "words", words);
-            notify_all_players_event(session, "words", NULL, NULL, d);
+            notify_all_players_event(session, NULL, "words", NULL, NULL, d);
         }
         else
         {
@@ -145,6 +146,8 @@ void *handle_client(void *arg)
     client_t *client = (client_t *)arg;
     client->last_activity_ts.tv_sec = 0;
     client->last_activity_ts.tv_nsec = 0;
+
+    cJSON *uuid_tmp = NULL;
 
     // 1) handshake: uuid + name
     char buf[1024] = {0};
@@ -199,8 +202,12 @@ void *handle_client(void *arg)
     }
 
     printf("Player added to session. Current count: %d\n", count);
-    send_event(client->socket, "lobby", client->name, "added to lobby", NULL);
-
+    uuid_tmp = cJSON_CreateObject();
+    if (!uuid_tmp) exit(EXIT_FAILURE);
+    cJSON_AddStringToObject(uuid_tmp, "uuid", client->uuid);
+    
+    send_event(client->socket, "lobby", client->name, "added to lobby", cJSON_Duplicate(uuid_tmp, 1));
+    notify_all_players_event(tmp, client, "info", client->name, "player joined the lobby", cJSON_Duplicate(uuid_tmp, 1));
     if (count == 2)
     {
         printf("Starting countdown for session with 2 players\n");
@@ -240,7 +247,7 @@ void *handle_client(void *arg)
                 pthread_mutex_unlock(&tmp->lock);
                 if (should_end)
                 {
-                    notify_all_players_event(tmp, "session_end", NULL, "Session closed after 10 minutes", NULL);
+                    notify_all_players_event(tmp, NULL, "session_end", NULL, "Session closed after 10 minutes", NULL);
                 }
             }
         }
@@ -342,8 +349,11 @@ void *handle_client(void *arg)
 
                 cJSON *d_all = cJSON_CreateObject();
                 if (d_all)
+                {
+                    cJSON_AddStringToObject(d_all, "uuid", client->uuid);
                     cJSON_AddNumberToObject(d_all, "value", curr_wpm);
-                notify_all_players_event(tmp, "wpm", client->name, NULL, d_all);
+                }
+                notify_all_players_event(tmp, NULL, "wpm", client->name, NULL, d_all);
             }
 
             cJSON_Delete(msg);
@@ -351,8 +361,8 @@ void *handle_client(void *arg)
             if (word_counter >= WORD_CHUNK)
             {
                 send_event(client->socket, "completed", client->name,
-                           "All words completed! You have 20 seconds before disconnect", NULL);
-
+                           "All words completed! You have 20 seconds before disconnect", cJSON_Duplicate(uuid_tmp, 1));
+                
                 time_t start_timeout = time(NULL);
                 const time_t timeout_duration = 20;
 
@@ -399,6 +409,7 @@ after_loop:
     remove_player(list_g, tmp, client->uuid);
 
 cleanup:
+    if (uuid_tmp) cJSON_Delete(uuid_tmp);
     close(client->socket);
 
     pthread_mutex_lock(&client_lock_g);

@@ -116,6 +116,8 @@ class TypingClient:
 
             # THREAD FOR AUTOPLAY
             # threading.Thread(target=self._demo_autoplay, daemon=True).start()
+        elif mtype == "info":
+            print(f"[INFO] {player} has joined the lobby!")
         elif mtype == "wpm":
             print(f"[WPM] {player}: {data.get('value')}")
         elif mtype == "completed":
