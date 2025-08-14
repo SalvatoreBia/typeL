@@ -9,7 +9,7 @@ LIBS=-lcjson
 
 SRCS=backend.c network.c
 OBJS=$(SRCS:.c=.o)
-BIN=typer-server
+BIN=typeL-server
 
 all: $(BIN)
 

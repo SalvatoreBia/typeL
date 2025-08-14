@@ -66,6 +66,9 @@ class TypingClient:
             'name': name
         })
 
+    def request_new_lobby(self):
+        """NEW: ask server to move us to a new lobby (accepted only after game starts)."""
+        self.send_json({'type': 'new_lobby_request'})
 
     def send_word(self, word: str):
         self.send_json({
@@ -82,7 +85,11 @@ class TypingClient:
     # MESSAGE HANDLING
     def _reader_loop(self):
         while not self.stop_event.is_set():
-            line = self.rfile.readline()
+            try:
+                line = self.rfile.readline()
+            except Exception:
+                break
+
             if not line:
                 break
 
@@ -107,19 +114,19 @@ class TypingClient:
         if mtype == "error":
             print(f"[ERROR] {message}")
         elif mtype == "lobby":
-            print(f"[LOBBY] {message} (player={player})")
+            # Server now sends data.players array with existing players
+            players = (data or {}).get("players") or []
+            print(f"[LOBBY] {message} | players in lobby: {len(players)}")
         elif mtype == "countdown":
             print(f"[COUNTDOWN] {data.get('value')}")
         elif mtype == "words":
             self.words = data.get("words", [])
             print(f"[WORDS] received {len(self.words)} words")
-
-            # THREAD FOR AUTOPLAY
             # threading.Thread(target=self._demo_autoplay, daemon=True).start()
         elif mtype == "info":
-            print(f"[INFO] {player} has joined the lobby!")
+            print(f"[INFO] {message or ''} {('(player=' + str(player) + ')') if player else ''}")
         elif mtype == "wpm":
-            print(f"[WPM] {player}: {data.get('value')}")
+            print(f"[WPM] {data.get('uuid')}: {data.get('value')}")
         elif mtype == "completed":
             print(f"[COMPLETED] {message}")
         elif mtype == "timeout_warning":
@@ -146,25 +153,3 @@ class TypingClient:
             self.send_word(w)
             time.sleep(1)
 
-
-def main():
-    host = '127.0.0.1'
-    port = 9000
-
-    client = TypingClient(host, port)
-    client.connect()
-
-    uuid = str(uuidlib.uuid4())
-    name = 'sborra'
-    client.handshake(uuid, name)
-
-    try:
-        while client.reader_thread and client.reader_thread.is_alive():
-            client.reader_thread.join(timeout=0.25)
-    except KeyboardInterrupt:
-        client.disconnect()
-        client.close()
-
-    
-if __name__ == '__main__':
-    main()

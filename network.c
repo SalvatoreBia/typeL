@@ -13,17 +13,14 @@
 #include "network.h"
 #include "backend.h"
 
-
 pthread_mutex_t client_lock_g = PTHREAD_MUTEX_INITIALIZER;
 session_list_t *list_g;
 int active_clients_g = 0;
-
 
 static inline double timespec_diff_sec(const struct timespec *a, const struct timespec *b)
 {
     return (a->tv_sec - b->tv_sec) + (a->tv_nsec - b->tv_nsec) / 1e9;
 }
-
 
 static void send_json_line(int fd, cJSON *root)
 {
@@ -97,7 +94,7 @@ static void notify_all_players_event(session_t *session,
 // returns the list of players already in the session
 // in JSON format. The lock is needed since one player
 // could exit the lobby while the count is taking place
-static cJSON* build_players_list_obj(session_t *session, const char *uuid)
+static cJSON *build_players_list_obj(session_t *session, const char *uuid)
 {
     pthread_mutex_lock(&session->lock);
     cJSON *root = cJSON_CreateObject();
@@ -109,13 +106,13 @@ static cJSON* build_players_list_obj(session_t *session, const char *uuid)
 
     for (int i = 0; i < MAX_LOBBY_COUNT; i++)
     {
-        // we need to add only players that are not us, since this 
+        // we need to add only players that are not us, since this
         // function will be called right after the we will be added calling
         // the add_player function
         if (session->players[i] && strcmp(session->players[i]->uuid, uuid) != 0)
         {
             cJSON *obj = cJSON_CreateObject();
-            if (!obj) 
+            if (!obj)
             {
                 return NULL;
             }
@@ -227,11 +224,11 @@ void *handle_client(void *arg)
 
     printf("Client connected: name=%s uuid=%s\n", client->name, client->uuid);
 
-    // with the client being verified, we can now call the 
+    // with the client being verified, we can now call the
     // function find_free_session and try to add him to any free lobby
 
     // semi-colon needed since a declaration is not permitted after a goto
-lobby_changed: ;
+lobby_changed:;
 
     session_t *tmp = find_free_session(list_g);
     if (!tmp)
@@ -246,7 +243,7 @@ lobby_changed: ;
         send_event(client->socket, "error", NULL, "failed to add player to session", NULL);
         goto cleanup;
     }
-    
+
     printf("Player added to session. Current count: %d\n", pcount);
 
     // we need to notify the player that it has been added to a lobby, and
@@ -261,9 +258,10 @@ lobby_changed: ;
     send_event(client->socket, "lobby", NULL, "added to lobby", players_list);
 
     uuid_tmp = cJSON_CreateObject();
-    if (!uuid_tmp) exit(EXIT_FAILURE);
+    if (!uuid_tmp)
+        exit(EXIT_FAILURE);
     cJSON_AddStringToObject(uuid_tmp, "uuid", client->uuid);
-    
+
     notify_all_players_event(tmp, client, "info", client->name, "player joined the lobby", cJSON_Duplicate(uuid_tmp, 1));
     if (pcount == 2)
     {
@@ -430,7 +428,7 @@ lobby_changed: ;
             {
                 send_event(client->socket, "completed", client->name,
                            "All words completed! You have 20 seconds before disconnect", cJSON_Duplicate(uuid_tmp, 1));
-                
+
                 time_t start_timeout = time(NULL);
                 const time_t timeout_duration = 20;
 
@@ -475,7 +473,7 @@ lobby_changed: ;
 
 after_loop:
     remove_player(list_g, tmp, client->uuid);
-    
+
     // here we notify the other players when our client
     // has disconnected from the lobby, in order to update the UI
     // we do this only if the player has actually been added to the lobby
@@ -493,7 +491,8 @@ after_loop:
     }
 
 cleanup:
-    if (uuid_tmp) cJSON_Delete(uuid_tmp);
+    if (uuid_tmp)
+        cJSON_Delete(uuid_tmp);
     close(client->socket);
 
     pthread_mutex_lock(&client_lock_g);
