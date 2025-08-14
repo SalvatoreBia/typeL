@@ -246,11 +246,6 @@ session_t *find_free_session(session_list_t *list)
     }
 
     pthread_mutex_lock(&list->lock);
-    if (list->count == MAX_SESSIONS)
-    {
-        pthread_mutex_unlock(&list->lock);
-        return NULL;
-    }
 
     int first_session_available = -1;
 
